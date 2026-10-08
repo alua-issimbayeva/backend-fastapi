@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from fastapi import Depends, FastAPI, HTTPException, Query
 
 from data import find_course, get_all_courses
-from models import Course
+from models import Course, Stats
 
 app = FastAPI(title="Course Catalog API")
 
@@ -40,6 +40,16 @@ def list_courses(
     # filter → sort → slice: the page is cut from the already ordered list
     offset, limit = p["offset"], p["limit"]
     return courses[offset : offset + limit]
+
+
+@app.get("/stats", response_model=Stats)
+def get_stats():
+    courses = get_all_courses()
+    return Stats(
+        total=len(courses),
+        total_credits=sum(c.credits for c in courses),
+        electives=sum(1 for c in courses if c.is_elective),
+    )
 
 
 @app.get("/courses/{course_id}", response_model=Course)
