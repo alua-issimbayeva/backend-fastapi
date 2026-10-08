@@ -1,4 +1,6 @@
-from fastapi import Depends, FastAPI, HTTPException
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Query
 
 from data import find_course, get_all_courses
 from models import Course
@@ -6,7 +8,10 @@ from models import Course
 app = FastAPI(title="Course Catalog API")
 
 
-def pagination(page: int = 1, page_size: int = 20):
+def pagination(
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+):
     return {"offset": (page - 1) * page_size, "limit": page_size}
 
 
