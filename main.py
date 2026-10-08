@@ -24,12 +24,15 @@ def read_root():
 def list_courses(
     is_elective: bool | None = None,
     sort: Literal["popular", "title"] = "popular",
+    q: str | None = None,
     p: dict = Depends(pagination),
 ):
     courses = get_all_courses()
     # "is not None" so that ?is_elective=false still filters
     if is_elective is not None:
         courses = [c for c in courses if c.is_elective == is_elective]
+    if q:
+        courses = [c for c in courses if q.lower() in c.title.lower()]
     if sort == "title":
         courses = sorted(courses, key=lambda c: c.title)
     else:
