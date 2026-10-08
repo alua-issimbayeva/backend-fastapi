@@ -26,8 +26,9 @@ The server starts at http://127.0.0.1:8000, and the interactive docs are at http
 | Route | Description |
 |---|---|
 | `GET /` | Checks that the server is alive |
-| `GET /courses` | Course list. Query params: `is_elective` (true/false), `sort` (`popular` by default, or `title`), `page` (default 1, at least 1), `page_size` (default 20, from 1 to 100) |
+| `GET /courses` | Course list. Query params: `is_elective` (true/false), `sort` (`popular` by default, or `title`), `q` (case-insensitive search in the title), `page` (default 1, at least 1), `page_size` (default 20, from 1 to 100) |
 | `GET /courses/{course_id}` | A single course, or 404 `{"detail": "Course not found"}` |
+| `GET /stats` | Catalog statistics: `total`, `total_credits`, `electives` (bonus 4) |
 
 ## What was verified
 
@@ -46,10 +47,19 @@ All checked against the running server (`fastapi dev main.py`) and through `/doc
 | `GET /courses?page=4&page_size=2` | `[]` |
 | `GET /courses/web-security` | 200, the Web Security Essentials course |
 | `GET /courses/nope` | 404, `{"detail": "Course not found"}` |
-| `GET /courses?page=0` | 422, "Input should be greater than or equal to 1" (bonus 2) |
-| `GET /courses?page_size=1000` | 422, "Input should be less than or equal to 100" (bonus 2) |
-| `GET /courses?page_size=100` | 200, all 6 courses (bonus 2) |
-| `/docs` | Shows exactly three routes: `GET /`, `GET /courses`, `GET /courses/{course_id}`, and the `Course` schema |
+| `/docs` | Shows the three core routes `GET /`, `GET /courses`, `GET /courses/{course_id}` (plus `GET /stats` from bonus 4), and the `Course` schema |
+
+### Bonus tasks
+
+| Bonus | Request | Result |
+|---|---|---|
+| 1. `sort` as `Literal["popular", "title"]` | `GET /courses?sort=banana` | 422, "Input should be 'popular' or 'title'"; `/docs` shows a dropdown |
+| 2. Pagination limits with `Query` | `GET /courses?page=0` | 422, "Input should be greater than or equal to 1" |
+| | `GET /courses?page_size=1000` | 422, "Input should be less than or equal to 100" |
+| | `GET /courses?page_size=100` | 200, all 6 courses |
+| 3. Search by title (`q`) | `GET /courses?q=react` | modern-frontend |
+| | `GET /courses?q=api` | backend-fastapi, api-design |
+| 4. `GET /stats` with a `Stats` model | `GET /stats` | `{"total": 6, "total_credits": 28, "electives": 2}` |
 
 Also checked:
 
