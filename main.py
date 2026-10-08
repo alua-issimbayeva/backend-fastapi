@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 
@@ -23,7 +23,7 @@ def read_root():
 @app.get("/courses", response_model=list[Course])
 def list_courses(
     is_elective: bool | None = None,
-    sort: str = "popular",
+    sort: Literal["popular", "title"] = "popular",
     p: dict = Depends(pagination),
 ):
     courses = get_all_courses()
