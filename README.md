@@ -1,6 +1,6 @@
 # Course Catalog API
 
-A FastAPI backend that serves the course catalog (moved here from `lib/courses.ts`) with filtering, sorting, and pagination. Since Lab 5 it is the data source for the Next.js frontend [course-catalog](https://github.com/alua-issimbayeva/course-catalog) and accepts likes and enrollments.
+A FastAPI backend that serves the course catalog (moved here from `lib/courses.ts`) with filtering, sorting, and pagination. Since Lab 5 it is the data source for the Next.js frontend [-awt-lab02-issimbaeva-alua](https://github.com/alua-issimbayeva/-awt-lab02-issimbaeva-alua) and accepts likes and enrollments.
 
 ## How to run
 
