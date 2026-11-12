@@ -1,107 +1,170 @@
-# Course Catalog API
+# course-catalog-api
 
-A FastAPI backend that serves the course catalog (moved here from `lib/courses.ts`) with filtering, sorting, and pagination. Since Lab 5 it is the data source for the Next.js frontend [-awt-lab02-issimbaeva-alua](https://github.com/alua-issimbayeva/-awt-lab02-issimbaeva-alua) and accepts likes and enrollments.
+Backend of the course catalog: FastAPI, SQLAlchemy 2.1, PostgreSQL, and Alembic
+migrations (Labs 4–7 of "Advanced Web Technologies"). The Next.js frontend lives in
+[-awt-lab02-issimbaeva-alua](https://github.com/alua-issimbayeva/-awt-lab02-issimbaeva-alua).
 
 ## How to run
 
-Requires Python 3.10+.
+You need Python 3.11 or newer and PostgreSQL 16 or newer.
+
+Once, as the `postgres` superuser, create the role and the database:
+
+```sql
+CREATE ROLE catalog_app LOGIN PASSWORD 'change-me';
+CREATE DATABASE course_catalog OWNER catalog_app;
+```
+
+Then, from the project folder:
 
 ```bash
-# macOS / Linux
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Windows (PowerShell)
+# 1. virtual environment
 python -m venv .venv
-.venv\Scripts\Activate.ps1
+source .venv/bin/activate          # Windows (PowerShell): .venv\Scripts\Activate.ps1
 
+# 2. dependencies
 pip install -r requirements.txt
+
+# 3. settings: the database address
+cp .env.example .env               # Windows (PowerShell): Copy-Item .env.example .env
+
+# 4. schema: both migrations, 0001 and 0002
+alembic upgrade head
+
+# 5. initial data (clears the tables first; training database only)
+psql -h localhost -U catalog_app -d course_catalog -v ON_ERROR_STOP=1 -f seed.sql
+
+# 6. check that models and database agree, then start the server
+alembic check
 fastapi dev main.py
 ```
 
-The server starts at http://localhost:8000, and the interactive docs are at http://localhost:8000/docs. Start it before the frontend.
+API documentation: http://localhost:8000/docs. The password `change-me` is for
+teaching; in a real project, passwords are never put into the repository.
+
+With the server running, `python try_errors.py` checks the error responses
+(expected: `5 of 5 as expected`). `python check_db.py` checks the connection and
+`python check_models.py` compares the constraint names in the models with the database.
+Add `SQL_ECHO=true` to `.env` to see every SQL statement in the server window (only
+on your own machine: the log contains parameter values).
 
 ### Routes
 
 | Route | Description |
 |---|---|
 | `GET /` | Checks that the server is alive |
-| `GET /courses` | Course list. Query params: `is_elective` (true/false), `sort` (`popular` by default, or `title`), `q` (case-insensitive search in the title), `page` (default 1, at least 1), `page_size` (default 20, from 1 to 100) |
-| `GET /courses/{course_id}` | A single course, or 404 `{"detail": "Course not found"}` |
-| `POST /courses/{course_id}/like` | Adds a like and returns the updated course, or 404 (Lab 5) |
-| `POST /enrollments` | Enrolls a student: body `{"courseId", "studentName"}`, returns 201 with an `id` (Lab 5) |
-| `GET /enrollments` | All enrollments received so far (Lab 5) |
-| `GET /stats` | Catalog statistics: `total`, `totalCredits`, `electives` (Lab 4 bonus 4) |
+| `GET /courses` | Course list. Query params: `is_elective`, `level`, `sort` (`popular` by default, or `title`), `q` (search in the title), `page` (≥ 1), `page_size` (1–100) |
+| `GET /courses/{course_id}` | A single course, or 404 `Course not found` |
+| `POST /courses/{course_id}/like` | Adds a like (`UPDATE … RETURNING`) and returns the course, or 404 |
+| `POST /students` | Creates a student: `{"name", "email"}` → 201 with the `id` issued by the database |
+| `POST /enrollments` | Enrolls a student: `{"courseId", "studentId"}` → 201 with `id` and `enrolledAt` |
+| `GET /enrollments` | All enrollments with `courseTitle` and `studentName` (JOIN) |
+| `GET /stats/courses` | Number of enrollments per course, including courses with 0 (LEFT JOIN) |
+| `GET /stats` | Catalog totals: `total`, `totalCredits`, `electives` (Lab 4 bonus, now one SQL query) |
 
-Likes and enrollments are kept in memory, so they reset every time the server restarts.
+## What changed in the API
 
-## What changed (Lab 5)
+- **Data lives in PostgreSQL.** Courses, students, and enrollments are read from and
+  written to the `course_catalog` database through SQLAlchemy. Likes and enrollments
+  survive a server restart (before Lab 7 they were in Python lists and reset every time).
+  `data.py` and the in-memory `ENROLLMENTS` list are gone.
+- **`POST /enrollments` takes `studentId` instead of `studentName`.** An enrollment refers
+  to an existing student (a foreign key), so the student is created first with
+  `POST /students`. The response now has `enrolledAt`, set by the database (`now()`).
+  The Lab 5 enrollment form in the frontend still sends `studentName` and gets 422 until
+  it is updated.
+- **New routes:** `POST /students` and `GET /stats/courses`. `GET /enrollments` now returns
+  `courseTitle` and `studentName`, joined from the `courses` and `students` tables.
+- **`level` field:** every course has a required `level`, meant to be `beginner`,
+  `intermediate`, or `advanced` (not enforced by a CHECK yet). The existing courses got
+  `beginner` if elective and `intermediate` otherwise. `GET /courses?level=beginner` filters by it, and it combines with
+  the other filters.
+- **Constraint violations become proper responses** instead of 500: a taken email or a
+  repeated enrollment → 409, an unknown course or student → 404. A name shorter than two
+  characters is rejected by Pydantic with 422 before it reaches the database. Any other
+  violation is treated as a bug and still gives 500.
 
-### CORS: the allowed origin
+## Migrations
 
-`CORSMiddleware` allows exactly one origin, `http://localhost:3000`, where the Next.js dev server runs. The filter, the like button, and the enrollment form send their requests from the browser, and the page's origin (`localhost:3000`) differs from the API's (`localhost:8000`). Without an `access-control-allow-origin` header in the response, the browser hides the response from JavaScript. The value is an origin, meaning scheme, host and port, with no path and no trailing slash.
+| Command | What it does |
+|---------|--------------|
+| `alembic upgrade head` | applies all the missing migrations |
+| `alembic downgrade -1` | rolls back the last migration |
+| `alembic current` | shows the version of the database |
+| `alembic history` | shows the chain of migrations |
+| `alembic revision --autogenerate -m "text"` | writes a draft from models vs. database |
+| `alembic check` | reports whether the models and the database have diverged |
+| `alembic upgrade 0001:0002 --sql` | prints the SQL of a migration without running it |
+| `alembic stamp head` | marks the database as up to date without running migrations |
 
-```bash
-curl -i -H "Origin: http://localhost:3000" http://localhost:8000/   # access-control-allow-origin: http://localhost:3000, vary: Origin
-curl -i -H "Origin: http://evil.example" http://localhost:8000/     # still 200, but no access-control-allow-origin
-```
+The chain is `<base> -> 0001 (create catalog tables) -> 0002 (add course level)`.
+`0001` was autogenerated against an empty `scratch` database. The existing
+`course_catalog` database from Lab 6 was then marked with `alembic stamp head`, because
+`alembic upgrade head` failed on it with `DuplicateTable: relation "courses" already exists`.
+Run Alembic only from the project root: from `alembic/` it says
+`No 'script_location' key found in configuration`.
 
-The preflight for the enrollment form answers 200 with `access-control-allow-methods`, `access-control-allow-headers: content-type`, and `access-control-max-age: 600`. CORS doesn't protect data. The server still executes requests from other origins; CORS only decides whether the browser lets the page read the response.
+## Experiment log
 
-### camelCase in JSON
+Each experiment was undone right after it; the output quoted below is from my machine.
+My PostgreSQL server reports errors in Russian (`lc_messages`), so the database's own
+message and `DETAIL` lines were in Russian; I quote them in English translation. The
+error class, constraint name, values, and `[SQL: …]` are verbatim.
 
-All models inherit from `CamelModel` (`alias_generator=to_camel`, `validate_by_name=True`, `validate_by_alias=True`). Python code keeps snake_case (`is_elective`), while JSON uses camelCase (`isElective`), matching the TypeScript `Course` type in the frontend.
+| # | Experiment | What I saw | Cause | How I fixed it |
+|---|------------|------------|-------|----------------|
+| 1 | the `uq` template in `naming_convention` changed | `check_models.py`: `names only in models: ['enrollments_course_id_unique', 'students_email_unique']`, `names only in database: ['enrollments_course_id_student_id_key', 'students_email_key']` | The template `%(table_name)s_%(column_0_name)s_unique` builds different names from the ones PostgreSQL chose in Lab 6: a different suffix, and `column_0_name` takes only the first column of the two-column UNIQUE. Alembic would want to recreate these constraints, and the 409 lookup by name would stop matching. | Restored `%(table_name)s_%(column_0_N_name)s_key`; `check_models.py` printed `none` twice again. |
+| 2 | `min_length` removed from `StudentIn`, name `N` | `POST /students {"name": "N", "email": "n@example.com"}` → `500 Internal Server Error`. Server log: `sqlalchemy.exc.IntegrityError: (psycopg.errors.CheckViolation) … "students_name_check"`, `DETAIL: Failing row contains (7, N, n@example.com)` | Without the Pydantic rule the request reached the database. The `CHECK (length(name) >= 2)` rejected the row, so the data stayed correct, but `students_name_check` is not in `CONSTRAINT_ERRORS`, so `raise_http_error` re-raised it as an unknown violation → 500. | Restored `Field(min_length=2)`: the client gets 422 from Pydantic, and the CHECK stays as a second line of defense. `try_errors.py`: `5 of 5 as expected`. |
+| 3 | a typo in a constraint name in the dictionary | Key changed to `students_email_uniq`; `POST /students` with `aigerim@example.com` → `500`. Log: `(psycopg.errors.UniqueViolation) … unique constraint "students_email_key"`, `DETAIL: Key (email)=(aigerim@example.com) already exists.` (`exc.orig.diag.constraint_name` = `students_email_key`, SQLSTATE `23505`) | The response is looked up by the exact constraint name. The database reported `students_email_key`, which no longer matched any key, so it was treated as an unknown violation. | Restored the key `students_email_key`; 409 again, `5 of 5`. |
+| 4 | `title` without `NOT NULL` in the database, `alembic check` | `Detected NOT NULL on column 'courses.title'`, `FAILED: New upgrade operations detected: [[('modify_nullable', None, 'courses', 'title', …`. With `title` as `varchar(100)`: `Detected type change from VARCHAR(length=100) to Text()`, `('modify_type', …)`, `FAILED` | `alembic check` compares the models with the real database, so it also sees changes made by hand in psql. It exits with an error, which is what makes it usable in CI. | `ALTER TABLE courses ALTER COLUMN title SET NOT NULL;` and `… TYPE text;` → `No new upgrade operations detected.` |
+| 5 | automatic migration `0002` on existing data | Autogenerate wrote `op.add_column('courses', sa.Column('level', sa.Text(), nullable=False))`. `alembic upgrade head`: `sqlalchemy.exc.IntegrityError: (psycopg.errors.NotNullViolation) column "level" of relation "courses" contains null values`, `[SQL: ALTER TABLE courses ADD COLUMN level TEXT NOT NULL]`; `alembic current` still `0001` | A NOT NULL column without a default cannot be added to a table with 6 rows: there is no value for them. Autogenerate compares schemas, not data. The transaction rolled back. | Rewrote `0002` in three steps: add as nullable → `UPDATE … CASE WHEN is_elective THEN 'beginner' ELSE 'intermediate' END` → `alter_column(nullable=False)`. Applied: `0002 (head)`. |
+| 6 | `import models` commented out in `env.py` | `alembic revision --autogenerate -m "oops"`: `Detected removed table 'courses'`, `Detected removed index 'enrollments_student_id_idx'`, `… 'enrollments'`, `… 'students'`; `0003_oops.py` had `op.drop_table` for all three tables | Without the import the models never register in `Base.metadata`, so the "target schema" was empty and every real table looked superfluous. In my run `drop_table('courses')` even came before `enrollments`, so it would also have failed on the foreign key. | Did not run upgrade. Deleted `0003_oops.py`, restored `import models`; `alembic check` clean. |
+| 7 | a `phone` field in the model without a migration | `alembic check`: `Detected added column 'students.phone'`, `FAILED: New upgrade operations detected: [('add_column', None, 'students', Column('phone', Text(), table=<students>))]` | The model got ahead of the database. The app would break on any database without the column, and `alembic check` catches it before that. | Removed the line from `Student`; `alembic check` clean. (In real work: autogenerate a migration and commit it together with the model.) |
+| 8 | two migrations from one revision | `alembic heads` → `0003 (head)`, `0004 (head)`; `alembic upgrade head` → `FAILED: Multiple head revisions are present for given argument 'head'` | Both `0003` and `0004` have `down_revision = '0002'`, so the history forks and `head` is ambiguous. | `alembic merge heads --rev-id 0005` made a merge migration with `down_revision = ('0003', '0004')`; `alembic history` showed `0003, 0004 -> 0005 (head) (mergepoint)` and `0002 (branchpoint)`. Then deleted 0003–0005; `alembic heads` → `0002 (head)`. |
 
-- `validate_by_name=True` is required because `data.py` creates courses by field name. Without it, `is_elective=True` is silently ignored and every course becomes non-elective.
-- Query parameters are not aliased, so the filter is still `?is_elective=true`. `?isElective=true` is an unknown parameter and is ignored, which returns all 6 courses.
+## Decisions
 
-### New routes: example responses
+- **The response is chosen by the constraint name, and the error is caught after
+  `commit()`.** SQLSTATE only says what kind of violation happened: `23505` is the same for
+  both of our UNIQUE constraints (email and the course/student pair), and `23503` for both
+  foreign keys. The message text depends on the server's language and version; mine
+  arrives in Russian. The constraint name (`exc.orig.diag.constraint_name`) says exactly
+  which rule was broken, and `naming_convention` keeps those names identical in the models,
+  migrations, and database. A `SELECT` check in advance is a race: between "this email
+  is free" and the `INSERT`, another request can take it, and the database would still
+  reject the row. Trying and handling the refusal is correct under concurrency and
+  costs one query instead of two.
+- **A like is `UPDATE courses SET likes = likes + 1 … RETURNING`.** The database does the
+  increment atomically on the locked row. If the program read `likes`, added 1, and
+  wrote it back, two simultaneous requests could both read 11 and both write 12, and one
+  like would be lost. It also takes one round trip instead of two.
+- **Migration `0002` is split into three steps.** `ADD COLUMN level TEXT NOT NULL` fails
+  on a table that already has rows (experiment 5). The column is first added as
+  nullable, then the existing rows are filled by an explicit rule (a decision about
+  data, which autogenerate cannot make), and only then is `NOT NULL` set. All three
+  steps run in one transaction, so a failure anywhere leaves the database at `0001`.
 
-| Request | Response |
-|---|---|
-| `POST /courses/web-security/like` | 200 `{"id": "web-security", "title": "Web Security Essentials", "description": "JWT/OAuth2, XSS, CSRF, and SQL injection defense.", "credits": 4, "isElective": false, "likes": 22}` |
-| the same again | 200, `"likes": 23` |
-| `POST /courses/nope/like` | 404 `{"detail": "Course not found"}` |
-| `POST /enrollments` `{"courseId": "web-security", "studentName": "Aigerim"}` | 201 `{"courseId": "web-security", "studentName": "Aigerim", "id": 1}` |
-| the same with `"studentName": "A"` | 422, `"loc": ["body", "studentName"]`, `"msg": "String should have at least 2 characters"` |
-| the same with `"courseId": "nope"` | 404 `{"detail": "Course not found"}` |
-| `POST /enrollments` without `Content-Type: application/json` | 422, "Input should be a valid dictionary or object to extract fields from" |
-| `GET /enrollments` | `[{"courseId": "web-security", "studentName": "Aigerim", "id": 1}]` |
+## Migration 0002 self-check
 
-## What was verified (Lab 4)
+| What to check | Result |
+|---------------|--------|
+| Goal and steps | Yes: one change (a required `courses.level`) in three explicit steps; nothing unrelated in the migration. |
+| Data | Yes: nullable column → `UPDATE` (electives `beginner`, the rest `intermediate`) → `SET NOT NULL`; the six existing courses got values, checked with `SELECT id, is_elective, level`. |
+| Renames and drops | Yes: nothing is renamed or dropped on upgrade; it only adds a column. |
+| Rollback | Yes: `downgrade` drops `level`. It erases the level values; here they come back from the rule on the next upgrade, but levels chosen by hand would be lost, so on production I would back them up first. |
+| Verification | Yes: read the `--sql` output (BEGIN, ALTER, UPDATE, ALTER, version UPDATE, COMMIT), ran `downgrade -1` → `upgrade head` (the column disappeared, then came back with the same values), and `alembic check` is clean. Also replayed from an empty database (`0001`, `0002` in a row). |
+| History | Yes: `alembic heads` shows one head, `0002`; the migration was committed together with the model, schema, `level` filter, and `seed.sql`. |
+| Application | Yes: `CourseOut` has `level`, `GET /courses` accepts `?level=`, and `seed.sql` inserts a level for each course. For clients: a new field in every course response; existing request bodies are unchanged. |
 
-Since Lab 5, the JSON keys in these responses are camelCase (`isElective`, `totalCredits`); the routes and their results are otherwise unchanged.
+## Notes
 
-All checked against the running server (`fastapi dev main.py`) and through `/docs`:
-
-| Request | Result |
-|---|---|
-| `GET /` | `{"message": "Course Catalog API is running"}` |
-| `GET /courses` | 6 courses: ai-integration, modern-frontend, web-security, backend-fastapi, databases-postgresql, api-design |
-| `GET /courses?is_elective=true` | 2 courses: ai-integration, api-design |
-| `GET /courses?is_elective=false` | 4 courses: modern-frontend, web-security, backend-fastapi, databases-postgresql |
-| `GET /courses?sort=title` | ai-integration, api-design, backend-fastapi, modern-frontend, databases-postgresql, web-security |
-| `GET /courses?page=1&page_size=2` | ai-integration, modern-frontend |
-| `GET /courses?page=2&page_size=2` | web-security, backend-fastapi |
-| `GET /courses?page=3&page_size=2` | databases-postgresql, api-design |
-| `GET /courses?page=4&page_size=2` | `[]` |
-| `GET /courses/web-security` | 200, the Web Security Essentials course |
-| `GET /courses/nope` | 404, `{"detail": "Course not found"}` |
-| `/docs` | Shows the three core routes `GET /`, `GET /courses`, `GET /courses/{course_id}` (plus `GET /stats` from bonus 4), and the `Course` schema |
-
-### Bonus tasks
-
-| Bonus | Request | Result |
-|---|---|---|
-| 1. `sort` as `Literal["popular", "title"]` | `GET /courses?sort=banana` | 422, "Input should be 'popular' or 'title'"; `/docs` shows a dropdown |
-| 2. Pagination limits with `Query` | `GET /courses?page=0` | 422, "Input should be greater than or equal to 1" |
-| | `GET /courses?page_size=1000` | 422, "Input should be less than or equal to 100" |
-| | `GET /courses?page_size=100` | 200, all 6 courses |
-| 3. Search by title (`q`) | `GET /courses?q=react` | modern-frontend |
-| | `GET /courses?q=api` | backend-fastapi, api-design |
-| 4. `GET /stats` with a `Stats` model | `GET /stats` | `{"total": 6, "total_credits": 28, "electives": 2}` |
-
-Also checked:
-
-- `python -c "import data; print(len(data.COURSES))"` prints `6`.
-- `Course(id="x", title="t", description="d", credits="five")` raises a ValidationError ("Input should be a valid integer"), while `credits="5"` is converted to `5`.
+- **An extra CHECK from Lab 6.** My `schema.sql` has the bonus constraint
+  `students_email_format CHECK (position('@' IN email) > 1)`, which the lab's models don't
+  include. It is in the `Student` model as
+  `CheckConstraint(..., name=conv("students_email_format"))`: `conv()` marks the name as
+  final so the `ck` template doesn't turn it into `students_email_format_check`. With it,
+  `check_models.py` reports no differences, and migration `0001` recreates it.
+- **Kept from Lab 4:** the `q` title search, `sort` as `Literal["popular", "title"]`,
+  pagination limits with `Query`, and `GET /stats`, all now running as SQL queries.
+- The Lab 4 and Lab 5 write-ups (CORS, camelCase, the original verification tables) are
+  in the git history of this file (commit `5631ba7`).
