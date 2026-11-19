@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     database_url: str
     # optional: print every SQL statement (only on your own machine)
     sql_echo: bool = False
+    # GraphQL introspection (the schema map for GraphiQL); off on a closed production server
+    graphql_introspection: bool = True
 
 
 settings = Settings()
