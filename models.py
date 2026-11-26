@@ -70,3 +70,19 @@ class Enrollment(Base):
 
     course: Mapped["Course"] = relationship(back_populates="enrollments")
     student: Mapped["Student"] = relationship(back_populates="enrollments")
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (CheckConstraint("role IN ('student', 'admin')", name="role"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    email: Mapped[str] = mapped_column(unique=True)
+    # only the Argon2id hash is stored, never the password itself
+    password_hash: Mapped[str]
+    role: Mapped[str] = mapped_column(server_default=text("'student'"))
+    # one student - one account; NULL for the administrator; if the student
+    # profile is deleted, the account stays
+    student_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("students.id", ondelete="SET NULL"), unique=True
+    )
