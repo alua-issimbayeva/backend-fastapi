@@ -15,12 +15,14 @@ from strawberry.extensions import (
     QueryDepthLimiter,
 )
 from strawberry.fastapi import BaseContext, GraphQLRouter
+from strawberry.permission import BasePermission
 from strawberry.types import Info
 
 import services
+from auth import can_access_student, get_optional_user
 from config import settings
 from db import get_db
-from models import Course, Enrollment, Student
+from models import Course, Enrollment, Student, User
 
 
 def check_limit(limit: int) -> int:
@@ -60,11 +62,12 @@ def batch_loader(db: Session, column, many: bool = False) -> DataLoader:
 
 
 class Context(BaseContext):
-    """Created per request: the session and loaders don't outlive the request."""
+    """Per request: the session, the user, and the loaders live for one request."""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, user: User | None):
         super().__init__()
         self.db = db
+        self.user = user  # None if the request came without a token
         self.course = batch_loader(db, Course.id)
         self.student = batch_loader(db, Student.id)
         self.enrollments_of_course = batch_loader(db, Enrollment.course_id, many=True)
@@ -73,8 +76,46 @@ class Context(BaseContext):
         )
 
 
-def get_context(db: Annotated[Session, Depends(get_db)]) -> Context:
-    return Context(db)
+def get_context(
+    db: Annotated[Session, Depends(get_db)],
+    # a bad token -> 401 from FastAPI before GraphQL starts; no token -> None
+    user: Annotated[User | None, Depends(get_optional_user)],
+) -> Context:
+    return Context(db, user)
+
+
+class IsAuthenticated(BasePermission):
+    message = "Authentication required"
+
+    def has_permission(self, source, info: Info, **kwargs) -> bool:
+        return info.context.user is not None
+
+
+class IsAdmin(BasePermission):
+    message = "Admin role required"
+
+    def has_permission(self, source, info: Info, **kwargs) -> bool:
+        user = info.context.user
+        return user is not None and user.role == "admin"
+
+
+class IsSelfOrAdmin(BasePermission):
+    """For Student fields: source is the student row itself."""
+
+    message = "Not allowed to read this field"
+
+    def has_permission(self, source, info: Info, **kwargs) -> bool:
+        user = info.context.user
+        # a student's id is a GraphQL string, user.student_id is a number
+        return user is not None and can_access_student(user, int(source.id))
+
+
+@strawberry.type(name="User")
+class UserType:
+    # a whitelist, like UserOut: password_hash is not here
+    id: strawberry.ID
+    email: str
+    role: str
 
 
 @strawberry.type(name="Course")
@@ -96,7 +137,9 @@ class CourseType:
 class StudentType:
     id: strawberry.ID
     name: str
-    email: str
+    # nullable on purpose: a denied field becomes null without nulling the parent;
+    # the check sits on the type's field, so it fires on every path to Student
+    email: str | None = strawberry.field(permission_classes=[IsSelfOrAdmin])
 
     @strawberry.field
     async def enrollments(self, info: Info) -> list["EnrollmentType"]:
@@ -134,7 +177,11 @@ class Query:
     def course(self, info: Info, id: strawberry.ID) -> CourseType | None:
         return info.context.db.get(Course, id)
 
-    @strawberry.field
+    @strawberry.field(permission_classes=[IsAuthenticated])
+    def me(self, info: Info) -> UserType:
+        return info.context.user
+
+    @strawberry.field(permission_classes=[IsAdmin])
     def students(self, info: Info, limit: int = 20) -> list[StudentType]:
         stmt = select(Student).order_by(Student.id).limit(check_limit(limit))
         return info.context.db.scalars(stmt).all()
